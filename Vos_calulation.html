@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import GPy
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import sys
+import fileinput
+import subprocess
+import numpy as np
+import math
+import pandas as pd
+import scipy as sp
+import scipy.stats
+from bayes_opt import BayesianOptimization
+from bayes_opt import UtilityFunction
+from matplotlib import gridspec
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+from scipy.stats import norm
+import safeopt
+from sklearn import svm
+from sympy import Symbol, solve
+
+
+# if len(sys.argv) != 3:
+#  	print("ERROR! Please insert your input properly:")
+#  	print("Usage : ./Vos_calculator.py Inverter_Number nfin_SA")
+#  	sys.exit()
+     
+# Ninv = int(sys.argv[1])
+# nfin_sa = int(sys.argv[2])
+# Ninv = 2
+nfin_sa = 1
+
+
+
+P_fail_positive = 0
+P_fail_negative = 0
+
+for line in fileinput.input('./offset.sp', inplace = True):        
+    if '.param nfin_pd_sa' in line:
+        line = line.replace(line, '.param nfin_pd_sa = {}\n'.format(nfin_sa))
+    sys.stdout.write(line)
+        
+for line in fileinput.input('./offset.sp', inplace = True):        
+        if 'sweep monte' in line:
+            line = line.replace( line, ".tran 0.01p 2n sweep monte=10000\n")
+        sys.stdout.write(line)
+
+# if nfin_sa<25:
+#offset +10mV
+positive_offset = 0.01
+for line in fileinput.input('./offset.sp', inplace = True):        
+        if 'vbl vbl' in line:
+            line = line.replace(line, "vbl vbl 0 pwl 0 0.69 2n 0.69 TD=0\n")
+        sys.stdout.write(line)
+
+
+subprocess.call("runHspice offset.sp",shell = True)
+subprocess.call("grep sa_out= offset.lis | awk -F 'sa_out=' '{print $2}' | awk -F ' ' '{print $1}' > sa_out.txt",shell = True)
+subprocess.call("./perl_vos", shell = True)
+
+# result = open('./sa_out.txt')
+# positive_result = float(result.readline())
+
+data_gx = pd.read_csv("./sa_out.txt",sep = "\t",engine='python') #VL flip batch file
+
+data_gx["pass"] = 0 #added "pass" column
+
+data_gx.loc[(data_gx["sa_out"]>0.325),"pass"]=1 #sa_out flip batch file
+
+dfgroup = data_gx.groupby("pass")
+
+for cluster,fail in dfgroup: 
+    indicateArray = np.array(fail) #fail sample array
+
+P_fail_positive = len(indicateArray)/len(data_gx)
+
+#offset -10mV
+negative_offset = -0.01
+for line in fileinput.input('./offset.sp', inplace = True):        
+        if 'vbl vbl' in line:
+            line = line.replace(line, "vbl vbl 0 pwl 0 0.67 2n 0.67 TD=0\n")
+        sys.stdout.write(line)
+
+
+subprocess.call("runHspice offset.sp",shell = True)
+subprocess.call("grep sa_out= offset.lis | awk -F 'sa_out=' '{print $2}' | awk -F ' ' '{print $1}' > sa_out.txt",shell = True)
+subprocess.call("./perl_vos", shell = True)
+
+# result = open('./sa_out.txt')
+# positive_result = float(result.readline())
+
+data_gx = pd.read_csv("./sa_out.txt",sep = "\t",engine='python') #VL flip batch file
+
+data_gx["pass"] = 0 #added "pass" column
+
+data_gx.loc[(data_gx["sa_out"]>0.325),"pass"]=1 #sa_out flip batch file
+
+dfgroup = data_gx.groupby("pass")
+
+for cluster,fail in dfgroup: 
+    indicateArray = np.array(fail) #fail sample array
+
+P_fail_negative = len(indicateArray)/len(data_gx)
+
+    
+mu = [0]
+cov = [1]
+rv = sp.stats.norm(mu,cov)
+
+mean = Symbol('mean')
+sigma = Symbol('sigma')
+
+equation1 = mean + (rv.ppf(P_fail_positive)[0]*sigma) - 0.01
+equation2 = mean + (rv.ppf(P_fail_negative)[0]*sigma) + 0.01
+
+Result = solve((equation1, equation2), dict = True)
+
+mean = float(Result[0][mean])
+sigma = float(Result[0][sigma])
+
+print("vos_mean_value =  ", mean)
+print("vos_sigma_value =  ", sigma)
