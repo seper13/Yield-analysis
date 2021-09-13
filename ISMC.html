@@ -1,0 +1,240 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import sys
+import fileinput
+import subprocess
+import numpy as np
+import math
+import pandas as pd
+import scipy as sp
+import scipy.stats
+import re
+
+if len(sys.argv) != 3:
+ 	print("ERROR! Please insert your input properly:")
+ 	print("Usage : ./ISMC.py Inverter_Number nfin_SA")
+ 	sys.exit()
+
+Ninv = int(sys.argv[1])
+nfin_sa = int(sys.argv[2])
+
+# speed_value = open('./ee')
+# speed = float(speed_value.readline())*(10**9)
+
+
+# Ninv = int(10)
+# nfin_sa = int(25)
+
+
+# mean_value = open('./uu')
+
+# sae_sub_mean = float(mean_value.readline())*(10**9)
+
+vt_sigma = 0.03195741847747844                            
+# sa_sigma = 10*(10**-3)
+
+dummy_data = pd.read_csv("./bisection_result/osv.txt" ,sep = "\t",engine='python')
+dummy= np.array(dummy_data)
+
+sapdl_osv = float(dummy[0][0])
+pgl_osv = float(dummy[0][1])
+# sapdr_osv = float('0.{}'.format(osv1[5]))
+# sapupr_osv = float('0.{}'.format(osv1[7]))
+
+# if len(osv1)==10:
+#     sae_sub = float('-0.{}'.format(osv1[9]))
+# if len(osv1)==9:
+#     sae_sub = float('-0.{}'.format(osv1[8]))
+    
+osv = np.array([sapdl_osv, pgl_osv])
+
+
+
+
+
+for line in fileinput.input('./hspiceD/schematic/netlist/input.ckt_dvth0_test', inplace = True):        
+        if 'xi66' in line:
+            line = line.replace(line, 'xi66 sae net051 net060 vbl vblb vdd vss VLSA nfin_pd_sa={} nfin_foot_sa=1 nfin_pu_sa=1 nfin_pg_sa=1 sapdl_dvth0={} sapdr_dvth0=0 sapupr_dvth0=0 safoot_dvth0=0\n'.format(nfin_sa, vt_sigma*osv[0]/math.sqrt(nfin_sa)))
+        sys.stdout.write(line)
+
+for line in fileinput.input('./hspiceD/schematic/netlist/input.ckt_dvth0_test', inplace = True):        
+        if 'xi58' in line:
+            line = line.replace(line, 'xi58 vbl vblb vdd vl vr vss vwl_select SRAM_Cell nfin_pn=1 nfin_pg=1 nfin_pu=1 pdl_dvth0=0 pgl_dvth0={} pdr_dvth0=0 pupl_dvth0=0\n'.format(vt_sigma*osv[1]))
+        sys.stdout.write(line)
+
+
+
+# for line in fileinput.input('./SRAM_array.sp', inplace = True):        
+#         if 'vsae_sub sae_sub' in line:
+#             line = line.replace(line, "vsae_sub sae_sub 0 0 pwl 0 0 0.79n 0 0.8n 'vdd' 1.5n 'vdd' 1.51n 0 2n 0 TD='0+({})*1e-9'\n".format( osv[4]))
+#         sys.stdout.write(line)
+
+# sae_sub_gx_mean = sae_sub_mean+osv[4]
+
+
+
+
+
+
+
+
+
+
+
+for line in fileinput.input('./SRAM_array.sp', inplace = True):        
+    if 'sweep monte' in line:
+        line = line.replace(line, '.tran 0.01p 2n sweep monte=500\n')
+    sys.stdout.write(line)
+         
+subprocess.call("runHspice SRAM_array.sp",shell = True)
+
+for line in fileinput.input('./batch3', inplace = True):        
+        if '> delVth_PGL.txt' in line:
+            line = line.replace( line, "grep %s:vg SRAM_array.lis | awk '{print $3}' > delVth_PGL.txt\n"%(Ninv+65) ) # no VLSA at SAE line inverter
+            # line = line.replace( line, "grep %s:vg SRAM_array.lis | awk '{print $3}' > delVth_PGL.txt\n"%(Ninv+68) ) # VLSA at SAE line inverter
+        sys.stdout.write(line)
+        
+for line in fileinput.input('./batch3', inplace = True):        
+        if '> delVth_SAPDL.txt' in line:
+            line = line.replace( line, "grep %s:vg SRAM_array.lis | awk '{print $3}' > delVth_SAPDL.txt\n"%(Ninv+75) ) # no VLSA at SAE line inverter
+            # line = line.replace( line, "grep %s:vg SRAM_array.lis | awk '{print $3}' > delVth_SAPDL.txt\n"%(Ninv+78) ) # VLSA at SAE line inverter
+        sys.stdout.write(line)
+        
+# for line in fileinput.input('./batch3', inplace = True):        
+#         if '> delVth_SAPDR.txt' in line:
+#             line = line.replace( line, "grep %s:vg SRAM_array.lis | awk '{print $3}' > delVth_SAPDR.txt\n"%(Ninv+76) ) # no VLSA at SAE line inverter
+#             # line = line.replace( line, "grep %s:vg SRAM_array.lis | awk '{print $3}' > delVth_SAPDR.txt\n"%(Ninv+79) ) # VLSA at SAE line inverter
+#         sys.stdout.write(line)
+
+# for line in fileinput.input('./batch3', inplace = True):        
+#         if '> delVth_SAPUPR.txt' in line:
+#             line = line.replace( line, "grep %s:vg SRAM_array.lis | awk '{print $3}' > delVth_SAPUPR.txt\n"%(Ninv+79) ) # no VLSA at SAE line inverter
+#             # line = line.replace( line, "grep %s:vg SRAM_array.lis | awk '{print $3}' > delVth_SAPDR.txt\n"%(Ninv+79) ) # VLSA at SAE line inverter
+#         sys.stdout.write(line)
+        
+subprocess.call("./batch3", shell = True) #VL flip batch file
+
+data_pgl = pd.read_csv("./delVth_PGL.txt",sep = "\t",engine='python') #VL flip batch file
+data_sapdl = pd.read_csv("./delVth_SAPDL.txt",sep = "\t",engine='python')
+# data_sapdr = pd.read_csv("./delVth_SAPDR.txt",sep = "\t",engine='python')
+# data_sapupr = pd.read_csv("./delVth_SAPUPR.txt",sep = "\t",engine='python')
+
+
+output_array_pgl = np.array(data_pgl.loc[0]).reshape(1,1)
+output_array_sapdl = np.array(data_sapdl.loc[0]).reshape(1,1)
+# output_array_sapdr = np.array(data_sapdr.loc[0]).reshape(1,1)
+# output_array_sapupr = np.array(data_sapupr.loc[0]).reshape(1,1)
+
+
+pglData_length = len(data_pgl)
+sapdlData_length = len(data_sapdl)
+# sapdrData_length = len(data_sapdr)
+# sapuprData_length = len(data_sapupr)
+
+
+n1 = int(pglData_length/500)
+n2 = int(sapdlData_length/500)
+# n3 = int(sapdrData_length/100)
+# n4 = int(sapuprData_length/100)
+
+i=0
+j=0
+k=0
+p=0
+
+while True:
+    i=i+n1
+    if i>pglData_length-1:
+        break
+    dummy_array = np.array(data_pgl.loc[i]).reshape(1,1)
+    output_array_pgl = np.r_[output_array_pgl, dummy_array]
+
+np.savetxt('./delVth_PGL.txt', output_array_pgl, delimiter=' ')
+
+while True:
+    j=j+n2
+    if j>sapdlData_length-1:
+        break
+    dummy_array = np.array(data_sapdl.loc[j]).reshape(1,1)
+    output_array_sapdl = np.r_[output_array_sapdl, dummy_array]
+
+np.savetxt('./delVth_SAPDL.txt', output_array_sapdl, delimiter=' ')
+
+# while True:
+#     k=k+n3
+#     if k>sapdrData_length-1:
+#         break
+#     dummy_array = np.array(data_sapdr.loc[k]).reshape(1,1)
+#     output_array_sapdr = np.r_[output_array_sapdr, dummy_array]
+
+# np.savetxt('./delVth_SAPDR.txt', output_array_sapdr, delimiter=' ')
+
+# while True:
+#     p=p+n4
+#     if p>sapuprData_length-1:
+#         break
+#     dummy_array = np.array(data_sapupr.loc[p]).reshape(1,1)
+#     output_array_sapupr = np.r_[output_array_sapupr, dummy_array]
+
+# np.savetxt('./delVth_SAPUPR.txt', output_array_sapupr, delimiter=' ')
+
+subprocess.call("./batch4",shell = True)
+
+data_gx = pd.read_csv("./output2.txt",sep = "\t",engine='python') #VL flip batch file
+
+data_gx["pass"] = 0 #added "pass" column
+
+data_gx.loc[(data_gx["sa_out"]>0.325),"pass"]=1 #sa_out flip batch file
+
+dfgroup = data_gx.groupby("pass")
+
+for cluster,fail in dfgroup: 
+    indicateArray = np.array(fail) #fail sample array
+
+j = 0
+errorSum = 0
+total_array = np.array([0,0,0]).reshape(1,3)
+
+N = len(data_gx)
+while True:
+    calculateVector = indicateArray[j,0:3]
+    # error0 = sp.stats.norm(0,vt_sigma).pdf(calculateVector[0])/sp.stats.norm(-osv[0],vt_sigma).pdf(calculateVector[0]) #pgl
+    # error1 = sp.stats.norm(0,vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[1])/sp.stats.norm(-osv[1],vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[1]) #sapdr
+    
+    error0 = sp.stats.norm(0,vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[0])/sp.stats.norm(-osv[0]*vt_sigma/math.sqrt(nfin_sa),vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[0]) #sapdl
+    error1 = sp.stats.norm(0,vt_sigma).pdf(calculateVector[1])/sp.stats.norm(-osv[1]*vt_sigma,vt_sigma).pdf(calculateVector[1]) #pgl
+    # error2 = sp.stats.norm(0,vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[2])/sp.stats.norm(-osv[2],vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[2]) #sapdr
+    # error3 = sp.stats.norm( sae_sub_mean ,sa_sigma).pdf((10**9)*calculateVector[4])/sp.stats.norm(sae_sub_gx_mean,sa_sigma).pdf((10**9)*calculateVector[4]) #sae_sub
+    # error4 = sp.stats.norm(0,vt_sigma).pdf(calculateVector[3])/sp.stats.norm(-osv[3],vt_sigma).pdf(calculateVector[3]) #sapupr
+    # errorSum = errorSum + (error0*error1*error2*error3*error4)
+    errorSum = errorSum + (error0*error1)
+    
+    
+    # # error0 = sp.stats.norm(0,vt_sigma).pdf(calculateVector[0])/sp.stats.norm(-test_data,vt_sigma).pdf(calculateVector[0]) #pgl
+    # # error1 = sp.stats.norm(0,vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[1])/sp.stats.norm(-test_data,vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[1]) #sapdl
+    # error2 = sp.stats.norm(0,vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[2])/sp.stats.norm(-test_data,vt_sigma/math.sqrt(nfin_sa)).pdf(calculateVector[2]) #sapdr
+    # errorSum = errorSum + (error2)
+    kkk_array = np.array([error0,error1, errorSum]).reshape(1,3)
+    
+    total_array = np.r_[total_array, kkk_array]
+
+    
+    j = j+1
+    if j==len(indicateArray):
+        break
+
+ISMC = (1/N)*errorSum  
+print("Ninv : {} , nfin_SA : {}".format(Ninv, nfin_sa))
+print("ISMC= " ,ISMC) 
+print("Number of data={}".format(N))
+print("Number of fail={}".format(len(indicateArray)))
+print("osv is :", osv)
+# print("wl to saout time is :", speed)
+
+
+subprocess.call("rm ./bisection_result/ISMC_Result_Ninv={}_nfin_SA={}".format(Ninv, nfin_sa) ,shell = True)
+
+final_output = open('./bisection_result/ISMC_Result_Ninv={}_nfin_SA={}'.format(Ninv, nfin_sa), 'w')
+final_output.write(str("ISMC = {}\nNumber fo data={}\nNumber of fail= {}\nOSV is : {}".format(ISMC,N,len(indicateArray),osv)))
+final_output.close()
