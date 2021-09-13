@@ -1,0 +1,57 @@
+def Tail_fitting(dataSetFileName ,lowTailSigma, highTailSigma, dataMode=0, QQPlot=1):
+    
+    #Load Data file & Sorting
+    if (dataMode>0):
+        data = dataSetFileName
+    else:
+        data = np.loadtxt("{}".format(dataSetFileName))
+        
+    DataMean = np.average(data)
+    DataSigma = np.std(data)
+    dataSorted = np.sort(data)
+    Ndata = len(dataSorted)
+    
+    #Calculte CDF value of lowTail & highTail
+    lowProb = scipy.stats.norm.cdf(lowTailSigma)
+    highProb = scipy.stats.norm.cdf(highTailSigma)
+
+    #Sigma Value extration
+    lowDataRanking = int(round(Ndata*lowProb, 0))
+    highDataRanking = int(round(Ndata*highProb, 0))
+    lowTailSigmaRev = scipy.stats.norm.ppf(lowDataRanking/Ndata)
+    highTailSigmaRev = scipy.stats.norm.ppf(highDataRanking/Ndata)
+    
+    #Calculate the line slop and constant value of Tail
+    i=0
+    dataLow = 0
+    dataHigh = 0
+    while True:
+        dataLow  += dataSorted[lowDataRanking -3 + i ] #AVG value calculation
+        dataHigh += dataSorted[highDataRanking - 3 + i]
+        i += 1
+        if i >= 6:
+            break  
+    dataLowAVG = dataLow/i
+    dataHighAVG = dataHigh/i
+    
+    slope = (dataHighAVG-dataLowAVG)/(highTailSigmaRev-lowTailSigmaRev)
+    meanTail = -highTailSigma*slope + dataHighAVG
+    sigmaTail = slope
+    
+    #Original data QQ plot
+    #data = np.loadtxt("{}".format(dataSetFileName))
+    if (QQPlot>0):
+        f1, ax1 = plt.subplots( figsize=(12,8)  )
+        probplot(data,plot=ax1)
+        
+        #Tail fitted data QQ plot
+        plot_scale = scipy.stats.norm.ppf(1/Ndata)
+        xRange = np.arange(plot_scale, -plot_scale, 0.05)
+        yPlot = sigmaTail*xRange + meanTail
+        ax1.plot(xRange, yPlot, 'g', label = "Tail fitted Data")
+        ax1.set_title(" Original QQ plot & Tail fitted QQ plot   ")
+        ax1.legend(loc="best")
+    print("Previous mean & sigma value :", DataMean, DataSigma)
+    print("Current mean & sigma value :", meanTail, sigmaTail )
+
+    return meanTail, sigmaTail
