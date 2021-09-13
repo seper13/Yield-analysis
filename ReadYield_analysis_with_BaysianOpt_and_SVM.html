@@ -1,0 +1,792 @@
+from __future__ import print_function, division, absolute_import
+
+import GPy
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import sys
+import fileinput
+import subprocess
+import numpy as np
+import math
+import pandas as pd
+import scipy as sp
+import scipy.stats
+from bayes_opt import BayesianOptimization
+from bayes_opt import UtilityFunction
+from matplotlib import gridspec
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+from scipy.stats import norm
+import safeopt
+from sklearn import svm
+
+# if len(sys.argv) != 3:
+#  	print("ERROR! Please insert your input properly:")
+#  	print("Usage : ./OSV_Searching_2dBO_final.py Inverter_Number nfin_SA")
+#  	sys.exit()
+     
+# invnum = int(sys.argv[1])
+# nfin_sa = int(sys.argv[2])
+
+# Monte_result = 0.01985 # NInv = 5, nfin_sa = 4
+# Monte_result = 2.5e-05 # Ninv = 20, nfin_sa = 1
+#Monte_result =  # Ninv = 13, nfin_sa = 1
+
+invnum = 5
+nfin_sa = 4
+
+vbl_mean_value =  0.05723840183805224
+vbl_sigma_value =  0.00920803425235945
+
+# vbl_mean_value =  0.2512587728305698 #Ninv = 20, half data
+# vbl_sigma_value =  0.017122306422711238
+
+# vbl_mean_value = 0.22852528649999998 #Ninv = 20, full_data
+# vbl_sigma_value = 0.028341411358080208
+
+
+# vbl_mean_value = 0.0697785282689144 #Ninv = 5, larger than mean data
+# vbl_sigma_value  = 0.007664471196290925
+
+# vbl_mean_value = 0.06012988444999991 #Ninv = 5, fulldata
+# vbl_sigma_value  = 0.011810343023769496
+
+vos_mean_value  =	-0.00174794 #nfin_sa = 4
+vos_sigma_value =	0.025269588
+
+# vos_mean_value =   -0.0027592760975772 #nfin_sa = 1
+# vos_sigma_value =   0.051412680507783214
+
+
+iteration_number = 150
+
+#Safe BO part
+
+def SAOUT_function(Vbl,Vos):
+
+    for line in fileinput.input('./SRAM_array_cp.sp', inplace = True):        
+        if 'vbl vbl' in line:
+            line = line.replace(line, "vbl vbl 0 pwl 0 '0.68- {} + {} -({})+({})' 2n '0.68 - {} + {} -({})+({})' TD=0\n".format(vbl_mean, vos_mean, Vbl, Vos, vbl_mean, vos_mean, Vbl, Vos))
+        sys.stdout.write(line)
+        
+    subprocess.call("runHspice SRAM_array_cp.sp",shell = True)
+    subprocess.call("grep sa_out= SRAM_array_cp.lis | awk -F 'sa_out=' '{print $2}' | awk -F ' ' '{print $1}' > sa_out.txt",shell = True)
+    
+    sa_out = open('./sa_out.txt')
+    output = float(sa_out.readline())
+    
+    return 1000*output
+
+def const_function(a,b):
+    const_result = 100*(( a + 8 )**2 + ( b - 8)**2)
+    return const_result
+
+def OSV_function(a,b):
+    output = -10*math.sqrt(a**2+b**2)
+    return output
+
+
+
+for line in fileinput.input('./SRAM_array_cp.sp', inplace = True):        
+        if 'vbl vbl' in line:
+            line = line.replace(line, "vbl vbl 0 pwl 0 0.68 2n 0.68 TD=0\n")
+        sys.stdout.write(line)
+
+
+
+for line in fileinput.input('./hspiceD/schematic/netlist/input.ckt_dvth0_test2', inplace = True):        
+    if 'xi66' in line:
+        line = line.replace(line, 'xi66 sae net051 net060 vbl vblb vdd vss VLSA nfin_pd_sa={} nfin_foot_sa=1 nfin_pu_sa=1 nfin_pg_sa=1 sapdl_dvth0=0 sapdr_dvth0=0 sapupr_dvth0=0 safoot_dvth0=0\n'.format(nfin_sa))
+    sys.stdout.write(line)
+
+subprocess.call('./invnum2.py {}'.format(invnum) , shell = True)
+        
+for line in fileinput.input('./SRAM_array_cp.sp', inplace = True): 
+        if 'vsae_sub sae_sub' in line:
+            line = line.replace( line , "vsae_sub sae_sub 0 0 pwl 0 0 0.79n 0 0.8n 'vdd' 1.5n 'vdd' 1.51n 0 2n 0 TD=0\n")
+        sys.stdout.write(line)
+
+for line in fileinput.input('./SRAM_array_cp.sp', inplace = True):        
+        if 'sweep monte' in line:
+            line = line.replace( line, ".tran 0.01p 2n $sweep monte=500\n")
+        sys.stdout.write(line)
+
+subprocess.call("runHspice SRAM_array_cp.sp",shell = True)
+subprocess.call("grep sae_sub_time= SRAM_array_cp.lis | awk '{print $2}' > uu",shell = True)
+subprocess.call("grep wl2sae= SRAM_array_cp.lis | awk -F 'wl2sae=' '{print $2}' | awk -F ' ' '{print $1}' > ee",shell = True)
+
+vbl_mean =  vbl_mean_value
+vbl_sigma = vbl_sigma_value
+
+
+vos_mean  =  vos_mean_value
+vos_sigma =  vos_sigma_value
+
+
+
+# vt_pgl =  vt_sigma #value that causes performance to fail
+origin_point1 = np.array([vbl_sigma])
+
+# vt_sapdl = (-vt_sigma/math.sqrt(nfin_sa))
+origin_point2 = np.array([ vos_sigma])
+
+i=int(0)
+k =0.5
+ 
+# OSV searching with bisection
+while True: 
+    next_point1 = i*(origin_point1)
+    next_point2 = i*(origin_point2)
+    
+    for line in fileinput.input('./SRAM_array_cp.sp', inplace = True):        
+        if 'vbl vbl' in line:
+            line = line.replace(line, "vbl vbl 0 pwl 0 '0.68- {} + {} +({})+({})' 2n '0.68 - {} + {} +({})+({})' TD=0\n".format(vbl_mean, vos_mean, next_point1[0], next_point2[0], vbl_mean, vos_mean, next_point1[0], next_point2[0]))
+        sys.stdout.write(line)
+        
+    subprocess.call('runHspice SRAM_array_cp.sp',shell = True)
+    subprocess.call("grep sa_out= SRAM_array_cp.lis | awk -F 'sa_out=' '{print $2}' | awk -F ' ' '{print $1}' > sa_out.txt",shell = True)
+    subprocess.call("grep delta_bl= SRAM_array_cp.lis | awk -F 'delta_bl=' '{print $2}' | awk -F ' ' '{print $1}' > bl_value.txt",shell = True)
+   
+    result = open('./sa_out.txt')
+
+    
+    output = float(result.readline())
+
+    next_point1 = k*(origin_point1)
+    next_point2 = k*(origin_point2)
+
+    for line in fileinput.input('./SRAM_array_cp.sp', inplace = True):        
+        if 'vbl vbl' in line:
+            line = line.replace(line, "vbl vbl 0 pwl 0 '0.68- {} + {} +({})+({})' 2n '0.68 - {} + {} +({})+({})' TD=0\n".format(vbl_mean, vos_mean, next_point1[0], next_point2[0], vbl_mean, vos_mean, next_point1[0], next_point2[0]))
+        sys.stdout.write(line)
+
+    subprocess.call('runHspice SRAM_array_cp.sp',shell = True)
+    subprocess.call("grep sa_out= SRAM_array_cp.lis | awk -F 'sa_out=' '{print $2}' | awk -F ' ' '{print $1}' > sa_out.txt",shell = True)
+    subprocess.call("grep delta_bl= SRAM_array_cp.lis | awk -F 'delta_bl=' '{print $2}' | awk -F ' ' '{print $1}' > bl_value.txt",shell = True)
+    
+    result2 = open('./sa_out.txt')
+
+    
+    output2 = float(result2.readline())
+
+    if abs(output-output2)>0.325:
+        print("bisection is done!")
+        break
+    
+    print("lower SA output value :", output)
+    print("upper SA output value :", output2)
+
+    k = k+0.5
+    i = i+0.5
+
+# input_data = pd.read_csv("./bisection_result/osv.txt",sep = "\t",engine='python')
+# next_point = np.array(input_data)
+
+# start_point = np.array([ next_point1[0], next_point2[0]]) #pgl, sapdl, sapdr, sapupr, sae_rise_time order
+start_point = np.array([ next_point2[0], -next_point1[0] ]) # x_axis_vos y_axis_vbl
+
+
+mpl.rcParams['figure.figsize'] = (20.0, 10.0)
+mpl.rcParams['font.size'] = 20
+mpl.rcParams['lines.markersize'] = 20
+
+plt.close("all")
+
+if abs(k)<4.5:
+    print("low_yield_estimation_start")
+    bnd = [(-8, 8), (-8, 8)]
+    
+    x0=np.array(start_point).reshape(1,2)
+    current_const = np.array([0,0])
+    y0_SAOUT= 1000*0.65
+    # y0_OSV = OSV_function( x0[0][0]/vt_sigma , math.sqrt(nfin_sa)*x0[0][1]/vt_sigma)
+    y0_OSV = OSV_function(  x0[0][1]/vbl_sigma  , x0[0][0]/vos_sigma)
+    # y0_const = const_function(x0[0][0]/vt_sigma , math.sqrt(nfin_sa)*x0[0][1]/vt_sigma)
+    y0 = np.array([y0_SAOUT, y0_OSV ]).reshape(1,2)
+    # x0_sigma_value = np.array([x0[0][0]/vt_sigma , math.sqrt(nfin_sa)*x0[0][1]/vt_sigma]).reshape(1,2)
+    x0_sigma_value = np.array([ x0[0][0]/vos_sigma, x0[0][1]/vbl_sigma  ]).reshape(1,2)
+    
+    
+    # lengthscale_OSV = vt_sigma/((nfin_sa**(1/3)))
+    # lengthscale_SAOUT = vt_sigma/((nfin_sa**(1/3)))
+    
+    lengthscale_OSV = 1.5
+    lengthscale_SAOUT = 1.5
+    # lengthscale_const = 0.7
+    
+    kernel_OSV = GPy.kern.Matern32(input_dim=len(bnd), variance=1, lengthscale=lengthscale_OSV,
+                          ARD=True) #OSV_kernel function
+    kernel_SAOUT = GPy.kern.Matern32(input_dim=len(bnd), variance=1, lengthscale=lengthscale_SAOUT,
+                          ARD=True) #sa_outl_kernel function
+    # kernel_const = GPy.kern.Matern32(input_dim=len(bnd), variance=1, lengthscale=lengthscale_const,
+    #                       ARD=True) #sa_outl_kernel function
+    
+    gp_SAOUT = GPy.models.GPRegression(x0_sigma_value, y0[:,0,None], kernel_SAOUT) #SAOUT_gp
+    gp_OSV = GPy.models.GPRegression(x0_sigma_value, y0[:,1,None], kernel_OSV) #OSV_gp
+    # gp_const = GPy.models.GPRegression(x0_sigma_value, y0[:,2,None], kernel_const) #const_gp
+    
+    opt = safeopt.SafeOptSwarm([gp_OSV, gp_SAOUT], [ -np.inf , 150], bounds=bnd, threshold=0)
+    
+    dummy_value = 1
+    
+    j=0
+    terminate_const = 0
+    
+    optimum_osv = np.array(opt.data[0])
+    optimum_osv = optimum_osv[0]
+    optimum_output = np.array(opt.data[1])
+    optimum_output = optimum_output[0]
+    
+    while True:
+        x_next = opt.optimize()
+        x_next=np.array([ x_next[0], x_next[1]])
+        y0_SAOUT= SAOUT_function(vbl_sigma*x_next[1], vos_sigma*x_next[0])
+        y0_OSV = OSV_function( x_next[1] , x_next[0])
+        # y0_const = const_function(x_next[0], x_next[1])
+        y_next =np.array([y0_OSV, y0_SAOUT]).reshape(1,2)
+        
+        opt.add_new_data_point(x_next, y_next)
+        
+        j=j+1
+            
+        if opt.data[1][j][1] <= 325:
+            terminate_const = terminate_const+1
+            
+        if opt.data[1][j][1] > 325:
+            if abs(opt.data[1][j][0]) > abs(optimum_output[0]):
+                terminate_const = terminate_const+1
+            else:
+                optimum_osv = opt.data[0][j]
+                optimum_output = opt.data[1][j]
+                terminate_const = 0
+        
+        print("next_point is :", x_next)
+        print("current norm of OSV is :", y_next[0][0])
+        print("current SAOUT value is :", y_next[0][1])
+        print("current best osv : ", optimum_osv)
+        print("current best output : ", optimum_output)
+        print("SAFEOPT iteration number is : ", j)
+        
+        if j>=iteration_number :
+            break
+    
+    OSV = optimum_osv
+    
+    gradient_lowbnd = 0.85
+    gradient_highbnd = 1
+    i=0
+    while i<5: #optimize the OSV with gradient sizing
+        gradient_constant = (gradient_lowbnd+gradient_highbnd)/2
+        dummy_saout = SAOUT_function(gradient_constant*(vbl_sigma*OSV[0]), gradient_constant*(vos_sigma*OSV[1]))
+        if dummy_saout>=325:
+            gradient_highbnd = gradient_constant
+        if dummy_saout<325:
+            gradient_lowbnd = gradient_constant
+        i=i+1
+        print("current iteration number is : ", i)
+        print("current gradient value is : ", gradient_constant)
+        
+    gradient_constant = (gradient_lowbnd+gradient_highbnd)/2
+    
+    final_OSV_vos = gradient_constant*(OSV[0]*vos_sigma)
+    final_OSV_vbl = gradient_constant*(OSV[1]*vbl_sigma)
+    final_OSV = np.array([final_OSV_vos, final_OSV_vbl])
+    final_OSV_norm = OSV_function(final_OSV_vbl/vbl_sigma, final_OSV_vos/vos_sigma)
+    
+    
+    print("OSV by safeBO : ", optimum_osv )
+    print("OSV by gradient sizing  : ", final_OSV)
+    print("final norm_of OSV and SAOUT is :", final_OSV_norm)
+    
+    
+    
+    
+    
+    # SVM part
+    def incircle_function(x,y):
+        if 64>= x**2 + y**2 :
+            result = 1
+        else:
+            result = 0
+        return result
+    vbl_mean =  vbl_mean_value
+    vbl_sigma = vbl_sigma_value
+    
+    
+    vos_mean  =  vos_mean_value
+    vos_sigma =  vos_sigma_value
+    
+    origin_point1 = np.array([vbl_sigma])
+    
+    origin_point2 = np.array([ vos_sigma])
+    
+    
+    
+    
+    
+    
+    
+    X_data = np.array(opt.data[0])
+    Y_data = np.array(opt.data[1])
+                      
+    
+    
+    
+    
+    
+    
+    X_data_firstCol = np.array(X_data[:,0])
+    
+    X_data_secondCol = np.array(X_data[:,1])
+    
+    Y_data_firstCol = []
+    i=0
+    N = len(X_data_firstCol)
+    
+    while i<N:
+        if Y_data[i,1] > 325:
+            Y_data_firstCol.append(1)
+        if Y_data[i,1] <= 325:
+            Y_data_firstCol.append(0)
+        i=i+1
+    
+    X_DATA_SVM_input = np.c_[X_data_firstCol, X_data_secondCol].reshape(N,2) #sapdr, pgl order
+    Y_DATA_SVM_input = np.array(Y_data_firstCol).reshape(N,)
+    
+    i=0
+    failed_sample = []
+    passed_sample = []
+    while i<N:
+        if Y_DATA_SVM_input[i]==1:
+            failed_sample.append(X_DATA_SVM_input[i])
+        if Y_DATA_SVM_input[i]==0:
+            passed_sample.append(X_DATA_SVM_input[i])
+        i=i+1
+    
+    passed_sample = np.array(passed_sample)
+    failed_sample = np.array(failed_sample)
+    
+    passed_Xdata = np.array(passed_sample[:,0])#sapdr
+    passed_Ydata = np.array(passed_sample[:,1]) #pgl
+    
+    failed_Xdata = np.array(failed_sample[:,0])#sapdr
+    failed_Ydata = np.array(failed_sample[:,1])#pgl
+    
+    training_number = 10
+    iteration_step = 1
+    final_region_sum = []
+    clf = svm.SVC(C=10000, kernel='rbf', verbose = 1)
+    
+    clf.fit(X_DATA_SVM_input[0:iteration_number], Y_DATA_SVM_input[0:iteration_number])
+    
+    
+
+    
+    x = []
+    y = []
+
+    
+    i=0
+    pass_count = []
+    while i<len(x):
+        test_array = np.array([ x[i] , y[i] ]).reshape(1,2)
+        if clf.predict(test_array)==0:
+            pass_count.append(test_array)
+        i=i+1
+        
+        
+        
+    
+    X_bnd = [-8,8]
+    Y_bnd = [-8,8]
+    
+    xxx = np.linspace(X_bnd[0], X_bnd[1], 300)
+    yyy = np.linspace(Y_bnd[0], Y_bnd[1], 300)
+    YYY, XXX = np.meshgrid(yyy, xxx)
+    xyxy = np.vstack([XXX.ravel(), YYY.ravel()]).T
+    
+    length_xyxy = len(xyxy)
+    
+    result = 0
+    k = 0
+    incircle_point = []
+    
+    while k<length_xyxy:
+        output = incircle_function(xyxy[k][0], xyxy[k][1])
+        if output == 1:
+            incircle_point.append(xyxy[k])
+        k = k+1
+        
+    final_point = []
+    k = 0
+    
+    while k<len(incircle_point):
+        dummy_array = np.array([incircle_point[k][0], incircle_point[k][1]]).reshape(1,2)
+        final_value = clf.predict(dummy_array)
+        if final_value[0] == 1:
+            final_point.append(incircle_point[k])
+        k=k+1
+        
+        
+    k=0
+    final_region = 0
+    
+    mu = [0,0]
+    cov = [[1,0], [0,1]]
+    
+    rv = sp.stats.multivariate_normal(mu,cov)
+    
+    while k<len(final_point):    
+        final_region = final_region + (0.053**2)*(rv.pdf(final_point[k]))
+        k = k+1
+        
+    # print("current training set number is :", training_number)
+    print("failure region area is : ", final_region)
+    # training_number += 10
+    # iteration_step += 1
+    # final_region_sum.append(final_region)
+    
+
+    
+    # number_of_training_data = np.linspace(1,iteration_step,1)
+    # plt.subplot(222)
+    # plt.plot(number_of_training_data, final_region_sum)
+    k=0
+    
+if abs(k)>=4.5:
+    print("high_yield_estimation_start")
+    bnd = [(-12, 12), (-12, 12)]
+    
+    x0=np.array(start_point).reshape(1,2)
+    current_const = np.array([0,0])
+    y0_SAOUT= 1000*0.65
+    # y0_OSV = OSV_function( x0[0][0]/vt_sigma , math.sqrt(nfin_sa)*x0[0][1]/vt_sigma)
+    y0_OSV = OSV_function(  x0[0][1]/vbl_sigma  , x0[0][0]/vos_sigma)
+    # y0_const = const_function(x0[0][0]/vt_sigma , math.sqrt(nfin_sa)*x0[0][1]/vt_sigma)
+    y0 = np.array([y0_SAOUT, y0_OSV ]).reshape(1,2)
+    # x0_sigma_value = np.array([x0[0][0]/vt_sigma , math.sqrt(nfin_sa)*x0[0][1]/vt_sigma]).reshape(1,2)
+    x0_sigma_value = np.array([ x0[0][0]/vos_sigma, x0[0][1]/vbl_sigma  ]).reshape(1,2)
+    
+    
+    # lengthscale_OSV = vt_sigma/((nfin_sa**(1/3)))
+    # lengthscale_SAOUT = vt_sigma/((nfin_sa**(1/3)))
+    
+    lengthscale_OSV = 1.5
+    lengthscale_SAOUT = 1.5
+    # lengthscale_const = 0.7
+    
+    kernel_OSV = GPy.kern.Matern32(input_dim=len(bnd), variance=1, lengthscale=lengthscale_OSV,
+                          ARD=True) #OSV_kernel function
+    kernel_SAOUT = GPy.kern.Matern32(input_dim=len(bnd), variance=1, lengthscale=lengthscale_SAOUT,
+                          ARD=True) #sa_outl_kernel function
+    # kernel_const = GPy.kern.Matern32(input_dim=len(bnd), variance=1, lengthscale=lengthscale_const,
+    #                       ARD=True) #sa_outl_kernel function
+    
+    gp_SAOUT = GPy.models.GPRegression(x0_sigma_value, y0[:,0,None], kernel_SAOUT) #SAOUT_gp
+    gp_OSV = GPy.models.GPRegression(x0_sigma_value, y0[:,1,None], kernel_OSV) #OSV_gp
+    # gp_const = GPy.models.GPRegression(x0_sigma_value, y0[:,2,None], kernel_const) #const_gp
+    
+    opt = safeopt.SafeOptSwarm([gp_OSV, gp_SAOUT], [ -np.inf , 150], bounds=bnd, threshold=0)
+    
+    dummy_value = 1
+    
+    j=0
+    terminate_const = 0
+    
+    optimum_osv = np.array(opt.data[0])
+    optimum_osv = optimum_osv[0]
+    optimum_output = np.array(opt.data[1])
+    optimum_output = optimum_output[0]
+    
+    while True:
+        x_next = opt.optimize()
+        x_next=np.array([ x_next[0], x_next[1]])
+        y0_SAOUT= SAOUT_function(vbl_sigma*x_next[1], vos_sigma*x_next[0])
+        y0_OSV = OSV_function( x_next[1] , x_next[0])
+        # y0_const = const_function(x_next[0], x_next[1])
+        y_next =np.array([y0_OSV, y0_SAOUT]).reshape(1,2)
+        
+        opt.add_new_data_point(x_next, y_next)
+        
+        j=j+1
+            
+        if opt.data[1][j][1] <= 325:
+            terminate_const = terminate_const+1
+            
+        if opt.data[1][j][1] > 325:
+            if abs(opt.data[1][j][0]) > abs(optimum_output[0]):
+                terminate_const = terminate_const+1
+            else:
+                optimum_osv = opt.data[0][j]
+                optimum_output = opt.data[1][j]
+                terminate_const = 0
+        
+        print("next_point is :", x_next)
+        print("current norm of OSV is :", y_next[0][0])
+        print("current SAOUT value is :", y_next[0][1])
+        print("current best osv : ", optimum_osv)
+        print("current best output : ", optimum_output)
+        print("SAFEOPT iteration number is : ", j)
+        
+        if j>=iteration_number :
+            break
+    
+    OSV = optimum_osv
+    
+    gradient_lowbnd = 0.85
+    gradient_highbnd = 1
+    i=0
+    while i<5: #optimize the OSV with gradient sizing
+        gradient_constant = (gradient_lowbnd+gradient_highbnd)/2
+        dummy_saout = SAOUT_function(gradient_constant*(vbl_sigma*OSV[0]), gradient_constant*(vos_sigma*OSV[1]))
+        if dummy_saout>=325:
+            gradient_highbnd = gradient_constant
+        if dummy_saout<325:
+            gradient_lowbnd = gradient_constant
+        i=i+1
+        print("current iteration number is : ", i)
+        print("current gradient value is : ", gradient_constant)
+        
+    gradient_constant = (gradient_lowbnd+gradient_highbnd)/2
+
+    
+    final_OSV_vos = gradient_constant*(OSV[0]*vos_sigma)
+    final_OSV_vbl = gradient_constant*(OSV[1]*vbl_sigma)
+    final_OSV = np.array([final_OSV_vos, final_OSV_vbl])
+    final_OSV_norm = OSV_function(final_OSV_vbl/vbl_sigma, final_OSV_vos/vos_sigma)
+    
+    print("OSV by safeBO : ", optimum_osv )
+    print("OSV by gradient sizing  : ", final_OSV)
+    print("final norm_of OSV and SAOUT is :", final_OSV_norm)
+    
+    
+    
+    
+    
+    # SVM part
+    def incircle_function(x,y):
+        if 288>= x**2 + y**2 :
+            result = 1
+        else:
+            result = 0
+        return result
+    
+    
+    vbl_mean =  vbl_mean_value
+    vbl_sigma = vbl_sigma_value
+    
+    
+    vos_mean  =  vos_mean_value
+    vos_sigma =  vos_sigma_value
+    
+
+    origin_point1 = np.array([vbl_sigma])
+    origin_point2 = np.array([ vos_sigma])
+    
+    
+    
+    
+    X_data = np.array(opt.data[0])
+    Y_data = np.array(opt.data[1])
+                      
+    
+    
+    
+    
+    
+    
+    X_data_firstCol = np.array(X_data[:,0])
+    
+    X_data_secondCol = np.array(X_data[:,1])
+    
+    Y_data_firstCol = []
+    i=0
+    N = len(X_data_firstCol)
+    
+    while i<N:
+        if Y_data[i,1] > 325:
+            Y_data_firstCol.append(1)
+        if Y_data[i,1] <= 325:
+            Y_data_firstCol.append(0)
+        i=i+1
+    
+    X_DATA_SVM_input = np.c_[X_data_firstCol, X_data_secondCol].reshape(N,2) #sapdr, pgl order
+    Y_DATA_SVM_input = np.array(Y_data_firstCol).reshape(N,)
+    
+    i=0
+    failed_sample = []
+    passed_sample = []
+    while i<N:
+        if Y_DATA_SVM_input[i]==1:
+            failed_sample.append(X_DATA_SVM_input[i])
+        if Y_DATA_SVM_input[i]==0:
+            passed_sample.append(X_DATA_SVM_input[i])
+        i=i+1
+    
+    passed_sample = np.array(passed_sample)
+    failed_sample = np.array(failed_sample)
+    
+    passed_Xdata = np.array(passed_sample[:,0])#sapdr
+    passed_Ydata = np.array(passed_sample[:,1]) #pgl
+    
+    failed_Xdata = np.array(failed_sample[:,0])#sapdr
+    failed_Ydata = np.array(failed_sample[:,1])#pgl
+    
+    training_number = 30
+    iteration_step = 1
+    final_region_sum = []
+    clf = svm.SVC(C=10000, kernel='rbf', verbose = 1)
+
+    
+    clf.fit(X_DATA_SVM_input[0:iteration_number], Y_DATA_SVM_input[0:iteration_number])
+    
+    
+
+    
+    x = []
+    y = []
+    
+
+    
+    i=0
+    pass_count = []
+    while i<len(x):
+        test_array = np.array([ x[i] , y[i] ]).reshape(1,2)
+        if clf.predict(test_array)==0:
+            pass_count.append(test_array)
+        i=i+1
+        
+        
+        
+    
+    X_bnd = [-12,12]
+    Y_bnd = [-12,12]
+    
+    xxx = np.linspace(X_bnd[0], X_bnd[1], 450)
+    yyy = np.linspace(Y_bnd[0], Y_bnd[1], 450)
+    YYY, XXX = np.meshgrid(yyy, xxx)
+    xyxy = np.vstack([XXX.ravel(), YYY.ravel()]).T
+    
+    length_xyxy = len(xyxy)
+    
+    result = 0
+    k = 0
+    incircle_point = []
+    
+    while k<length_xyxy:
+        output = incircle_function(xyxy[k][0], xyxy[k][1])
+        if output == 1:
+            incircle_point.append(xyxy[k])
+        k = k+1
+        
+    final_point = []
+    k = 0
+    
+    while k<len(incircle_point):
+        dummy_array = np.array([incircle_point[k][0], incircle_point[k][1]]).reshape(1,2)
+        final_value = clf.predict(dummy_array)
+        if final_value[0] == 1:
+            final_point.append(incircle_point[k])
+        k=k+1
+        
+        
+    k=0
+    final_region = 0
+    
+    mu = [0,0]
+    cov = [[1,0], [0,1]]
+    
+    rv = sp.stats.multivariate_normal(mu,cov)
+    
+    while k<len(final_point):    
+        final_region = final_region + (0.053**2)*(rv.pdf(final_point[k]))
+        k = k+1
+        
+    # print("current training set number is :", training_number)
+    print("failure region area is : ", final_region)
+    # training_number += 10
+    # iteration_step += 1
+    final_region_sum.append(final_region)
+    
+    k=5
+        
+    
+if k<=4.5:
+    # 샘플 데이터 표현
+    plt.scatter(X_DATA_SVM_input[:,0], X_DATA_SVM_input[:,1], c=Y_DATA_SVM_input, s=30, cmap=plt.cm.Paired)
+            
+    # 초평면(Hyper-Plane) 표현
+    ax = plt.gca()
+    xlim = [-8,8]
+    ylim = [-8,8]
+            
+    xx = np.linspace(xlim[0], xlim[1], 300)
+    yy = np.linspace(ylim[0], ylim[1], 300)
+    YY, XX = np.meshgrid(yy, xx)
+    xy = np.vstack([XX.ravel(), YY.ravel()]).T
+    Z = clf.decision_function(xy).reshape(XX.shape)
+    ax.contour(XX, YY, Z, colors='k', levels=[-1,1], alpha=0.5, linestyles=['--', '--'])
+            
+            # 지지벡터(Support Vector) 표현
+    ax.scatter(clf.support_vectors_[:,0], clf.support_vectors_[:,1], s=40, facecolors='r')
+    plt.show()
+            
+    x = []
+    y = []
+            
+    ax.plot(x,y, 'r.')
+    ax.plot(passed_Xdata, passed_Ydata,'k.')
+    ax.set_aspect('equal', adjustable='box')
+    ax.plot(failed_Xdata, failed_Ydata,'g.')
+
+if k>=4.5:
+    # 샘플 데이터 표현
+    plt.scatter(X_DATA_SVM_input[:,0], X_DATA_SVM_input[:,1], c=Y_DATA_SVM_input, s=30, cmap=plt.cm.Paired)
+            
+    # 초평면(Hyper-Plane) 표현
+    ax = plt.gca()
+    xlim = [-12,12]
+    ylim = [-12,12]
+            
+    xx = np.linspace(xlim[0], xlim[1], 450)
+    yy = np.linspace(ylim[0], ylim[1], 450)
+    YY, XX = np.meshgrid(yy, xx)
+    xy = np.vstack([XX.ravel(), YY.ravel()]).T
+    Z = clf.decision_function(xy).reshape(XX.shape)
+    ax.contour(XX, YY, Z, colors='k', levels=[-1,1], alpha=0.5, linestyles=['--', '--'])
+            
+            # 지지벡터(Support Vector) 표현
+    ax.scatter(clf.support_vectors_[:,0], clf.support_vectors_[:,1], s=40, facecolors='r')
+    plt.show()
+            
+    x = []
+    y = []
+            
+    ax.plot(x,y, 'r.')
+    ax.plot(passed_Xdata, passed_Ydata,'k.')
+    ax.set_aspect('equal', adjustable='box')
+    ax.plot(failed_Xdata, failed_Ydata,'g.')
+
+
+
+
+
+# final_output = open('./bisection_result/osv1.txt', 'w') #sapdl
+# final_output.write(str(OSV[0]))
+# final_output.close()
+    
+# final_output = open('./bisection_result/osv2.txt', 'w') #pgl
+# final_output.write(str(OSV[1]))
+# final_output.close()
+    
+# subprocess.call('paste ./bisection_result/osv1.txt ./bisection_result/osv2.txt > ./bisection_result/osv.txt ',shell = True)
+# subprocess.call('rm ./bisection_result/osv1.txt',shell = True)
+# subprocess.call('rm ./bisection_result/osv2.txt',shell = True)
+# subprocess.call('./perl_2d',shell = True)
+
+# subprocess.call("rm ./bisection_result/SVM_Result_Ninv={}_nfin_SA={}".format(invnum, nfin_sa) ,shell = True)
+
+# final_output = open('./bisection_result/SVM_Result_Ninv={}_nfin_SA={}'.format(invnum, nfin_sa), 'w')
+# final_output.write(str("failure region area is = {}\nNumber fo data={}".format(final_region, iteration_number)))
+# final_output.close()
